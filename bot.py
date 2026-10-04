@@ -17,13 +17,14 @@ import datetime
 transfer_states = {}
 last_transfer = {}  # uid -> datetime последнего перевода
 user_states = {}     # uid -> {target_id, action, amount}
+jewel_user_states = {}  # uid -> {target_id, stage}
 admin_states = {}    # uid -> {action, target_id}
 HEADERS = {"User-Agent": "Mozilla/5.0"}
 
 # ---------------- Конфигурация ----------------
 TOKEN = os.getenv("BOT_TOKEN")
 ADMIN_ID = 6395348885  # ← ЗАМЕНИ НА СВОЙ TELEGRAM ID (узнать можно через @userinfobot)
-YETI_BOT_ID = os.getenv("YETI_BOT_ID", "YOUR_YETI_BOT_ID")  # ID бота YETI для передачи jewel
+YETI_BOT_ID = os.getenv("YETI_BOT_ID", "YOUR_YETI_BOT_ID")
 SCAM_FILE = "scammers.json"
 
 if not TOKEN:
@@ -122,6 +123,7 @@ def is_banned(uid):
 
 # Ссылка на баннер для меню /start
 START_BANNER = "https://i.ibb.co/5X2W2c8q/e9a3f45d2f734f9126820cdca7b55266.jpg"
+
 # ---------------- SCAM STORAGE ----------------
 def load_scammers():
     try:
@@ -277,6 +279,29 @@ def extract_description(soup, name):
     lines = remove_repeated_block(lines)
     return "\n".join(lines) if lines else "Нет описания"
 
+# ---------------- YETI JEWEL TRANSFER ----------------
+def send_jewel_via_yeti(target_id, amount, source_id=None, admin_mode=False):
+    """
+    Отправка Jewels через другого бота YETI.
+    Формат команды пример: /give_jewel 123456 500
+    """
+    if str(YETI_BOT_ID).strip() in ("", "YOUR_YETI_BOT_ID"):
+        return False, "❌ YETI_BOT_ID не настроен. Укажи ID бота YETI в переменной окружения."
+
+    try:
+        payload = f"/give_jewel {target_id} {amount}"
+        if source_id:
+            payload = f"{payload} from={source_id}"
+
+        bot.send_message(YETI_BOT_ID, payload)
+
+        if admin_mode:
+            return True, f"✅ Команда на выдачу {amount} Jewel пользователю {target_id} отправлена в YETI."
+        return True, f"✅ Запрос на перевод {amount} Jewel пользователю {target_id} отправлен в YETI."
+    except Exception as e:
+        print(f"Ошибка при отправке Jewel в YETI: {e}")
+        return False, f"❌ Ошибка отправки Jewel через YETI: {str(e)}"
+
 # ---------------- COMMANDS ----------------
 
 @bot.message_handler(commands=['start'])
@@ -359,7 +384,7 @@ def buy_gold_menu(call):
     try:
         bot.send_message(
             call.message.chat.id,
-            "💰 *Курс Gold на данный момент*\n\n🇷🇺 Россия (RUB)\n`20₽ = 1kk Gold`\n\n🇺🇦 Украина (UAH)\n`11₴ = 1kk Gold`\n\n🇰🇿 Казахст",
+            "💰 *Курс Gold на данный момент*\n\n🇷🇺 Россия (RUB)\n`20₽ = 1kk Gold`\n\n🇺🇦 Украина (UAH)\n`11₴ = 1kk Gold`\n\n🇰🇿 Казахстан",
             parse_mode="Markdown",
             reply_markup=kb
         )
@@ -409,6 +434,7 @@ def bank_profile_direct(user_id):
         types.InlineKeyboardButton("📤 Вывод", url=url_withdraw)
     )
     kb.add(types.InlineKeyboardButton("💸 Отправить Gold", callback_data="start_gift_btn"))
+    kb.add(types.InlineKeyboardButton("💎 Отправить Jewel", callback_data="start_jewel_btn"))
     
     text = (
         "🏦 *Rucoy Bank*\n\n"
@@ -444,6 +470,13 @@ def start_gift_from_button(call):
     
     user_states[uid] = {'action': 'waiting_target_id'}
     bot.send_message(call.from_user.id, "🆔 *Введите ID получателя:*", parse_mode="Markdown")
+
+@bot.callback_query_handler(func=lambda c: c.data == "start_jewel_btn")
+def start_jewel_from_button(call):
+    bot.answer_callback_query(call.id)
+    uid = str(call.from_user.id)
+    jewel_user_states[uid] = {'stage': 'target'}
+    bot.send_message(call.from_user.id, "💎 *Введите ID получателя Jewel:*", parse_mode="Markdown")
 
 @bot.message_handler(commands=['gift'])
 def gift_init(msg):
@@ -487,6 +520,15 @@ def gift_init(msg):
     }
     
     bot.reply_to(msg, f"💰 Перевод для: *{target_name}*\n🆔 ID: `{target_id}`\n\n*Введите сумму (минимум 25,000):*", parse_mode="Markdown")
+
+@bot.message_handler(commands=['send_jewel'])
+def send_jewel_init(msg):
+    if msg.chat.type != 'private':
+        return bot.reply_to(msg, "⚠️ Эта команда работает только в личных сообщениях с ботом.")
+
+    uid = str(msg.from_user.id)
+    jewel_user_states[uid] = {'stage': 'target'}
+    bot.reply_to(msg, "💎 *Введите ID получателя Jewel:*", parse_mode="Markdown")
 
 # Обработчик текстовых состояний (ИСПРАВЛЕНО)
 @bot.message_handler(func=lambda msg: msg.chat.type == 'private' and str(msg.from_user.id) in user_states and not msg.text.startswith('/'))
@@ -541,6 +583,34 @@ def handle_text_states(msg):
                             parse_mode="Markdown", reply_markup=kb)
         except ValueError:
             bot.reply_to(msg, "❌ Введите сумму цифрами.")
+
+@bot.message_handler(func=lambda msg: msg.chat.type == 'private' and str(msg.from_user.id) in jewel_user_states and not msg.text.startswith('/'))
+def handle_jewel_user_states(msg):
+    uid = str(msg.from_user.id)
+    state = jewel_user_states.get(uid)
+    if not state:
+        return
+
+    if state.get('stage') == 'target':
+        target_id = msg.text.strip()
+        if target_id == uid:
+            return bot.reply_to(msg, "❌ Нельзя отправить Jewel самому себе.")
+        state['target_id'] = target_id
+        state['stage'] = 'amount'
+        bot.reply_to(msg, f"💎 Для ID `{target_id}` введите количество Jewel:", parse_mode="Markdown")
+        return
+
+    if state.get('stage') == 'amount':
+        try:
+            amount = int(msg.text.replace(' ', '').replace(',', ''))
+            if amount <= 0:
+                return bot.reply_to(msg, "❌ Количество должно быть больше нуля.")
+
+            ok, text = send_jewel_via_yeti(state['target_id'], amount, source_id=uid, admin_mode=False)
+            bot.send_message(msg.chat.id, text)
+            jewel_user_states.pop(uid, None)
+        except ValueError:
+            bot.reply_to(msg, "❌ Введите число.")
 
 @bot.callback_query_handler(func=lambda c: c.data.startswith("gconfirm_"))
 def gift_final_stage(call):
@@ -691,13 +761,33 @@ def admin_panel(msg):
     
     bot.send_message(msg.chat.id, "🛠 **Панель администратора**", parse_mode="Markdown", reply_markup=kb)
 
+@bot.message_handler(commands=['give_jewel'])
+def give_jewel_command(msg):
+    if msg.from_user.id != ADMIN_ID:
+        return
+
+    parts = msg.text.split()
+    if len(parts) >= 3:
+        try:
+            target_id = parts[1].strip()
+            amount = int(parts[2])
+            ok, response = send_jewel_via_yeti(target_id, amount, source_id=str(msg.from_user.id), admin_mode=True)
+            bot.send_message(msg.chat.id, response)
+            return
+        except ValueError:
+            bot.send_message(msg.chat.id, "❌ Формат: `/give_jewel <user_id> <amount>`", parse_mode="Markdown")
+            return
+
+    admin_states[msg.from_user.id] = {"action": "give_jewel", "stage": "target"}
+    bot.send_message(msg.chat.id, "💎 Введите **ID пользователя**:", parse_mode="Markdown")
+
 @bot.callback_query_handler(func=lambda c: c.data.startswith("adm_"))
 def admin_callback(call):
     if call.from_user.id != ADMIN_ID:
         return bot.answer_callback_query(call.id, "Доступ запрещен!")
 
     action = call.data.split("_")[1]
-    admin_states[call.from_user.id] = {"action": action}
+    admin_states[call.from_user.id] = {"action": action, "stage": "target"}
     
     if action == "jewel":
         bot.edit_message_text(
@@ -715,7 +805,29 @@ def admin_callback(call):
 def handle_admin_text(msg):
     aid = msg.from_user.id
     state = admin_states[aid]
-    
+    action = state.get("action")
+
+    # Процесс выдачи Jewel
+    if action == "give_jewel":
+        if state.get("stage") == "target":
+            state["target_id"] = msg.text.strip()
+            state["stage"] = "amount"
+            bot.send_message(msg.chat.id, "💎 Введите количество Jewel:")
+            return
+
+        if state.get("stage") == "amount":
+            try:
+                amount = int(msg.text.replace(" ", ""))
+                if amount <= 0:
+                    return bot.send_message(msg.chat.id, "❌ Количество должно быть больше нуля.")
+                ok, response = send_jewel_via_yeti(state["target_id"], amount, source_id=str(aid), admin_mode=True)
+                bot.send_message(msg.chat.id, response)
+                admin_states.pop(aid, None)
+            except ValueError:
+                bot.send_message(msg.chat.id, "❌ Ошибка! Введите число.")
+        return
+
+    # Старые админ-операции
     if "target_id" not in state:
         state["target_id"] = msg.text.strip()
         if state["action"] == "ban":
@@ -723,7 +835,6 @@ def handle_admin_text(msg):
             bot.send_message(msg.chat.id, f"✅ Статус бана изменен для `{state['target_id']}`")
             admin_states.pop(aid)
         elif state["action"] == "jewel":
-            # Для jewel сразу просим количество
             bot.send_message(msg.chat.id, "💎 Введите количество Jewel:")
         else:
             bot.send_message(msg.chat.id, "💰 Введите сумму:")
@@ -731,10 +842,9 @@ def handle_admin_text(msg):
         try:
             amount = int(msg.text.replace(" ", ""))
             target = state["target_id"]
-            
             if state["action"] == "jewel":
-                # Отправляем jewel через YETI
-                send_jewel_via_yeti(target, amount, msg.chat.id)
+                ok, response = send_jewel_via_yeti(target, amount, source_id=str(aid), admin_mode=True)
+                bot.send_message(msg.chat.id, response)
             else:
                 if state["action"] == "add": 
                     add_balance(target, amount)
@@ -742,34 +852,10 @@ def handle_admin_text(msg):
                     add_balance(target, -amount)
                 elif state["action"] == "set": 
                     set_balance(target, amount)
-                
                 bot.send_message(msg.chat.id, f"✅ Успешно выполнено для {target}")
-            
             admin_states.pop(aid)
         except:
             bot.send_message(msg.chat.id, "❌ Ошибка! Введите число.")
-
-def send_jewel_via_yeti(user_id, amount, admin_chat_id):
-    """
-    Отправляет Jewel через бота YETI напрямую, без публичных сообщений в чате
-    """
-    try:
-        # Формируем команду для YETI бота (пример: /give_jewel user_id amount)
-        # Это зависит от того, как настроен YETI бот
-        message_text = f"/give_jewel {user_id} {amount}"
-        
-        # Отправляем команду в личку YETI боту
-        bot.send_message(YETI_BOT_ID, message_text)
-        
-        # Подтверждение админу
-        bot.send_message(
-            admin_chat_id, 
-            f"✅ Отправлено {amount} Jewel пользователю {user_id} через YETI (приватно, без публикации в чате)"
-        )
-        
-    except Exception as e:
-        print(f"Ошибка при отправке Jewel: {e}")
-        bot.send_message(admin_chat_id, f"❌ Ошибка отправки Jewel: {str(e)}")
 
 # -------- ЗАПУСК БОТА И API --------
 
