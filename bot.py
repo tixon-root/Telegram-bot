@@ -141,6 +141,23 @@ def save_scammers(data):
 app = Flask('')
 CORS(app)
 
+@app.route('/health')
+def health_check():
+    return "ok", 200
+
+
+def keep_alive():
+    render_url = os.getenv("RENDER_EXTERNAL_URL")
+    if not render_url:
+        return
+    while True:
+        try:
+            requests.get(f"{render_url}/health", timeout=10)
+        except Exception as e:
+            print(f"⚠️ Keep-alive ping error: {e}")
+        time.sleep(300)
+
+
 @app.route('/')
 def home():
     return "Bot is alive!"
@@ -328,7 +345,7 @@ def send_calculator(call):
 def info_callback(call):
     bot.send_message(
         call.message.chat.id,
-        "ℹ️ *Информация*\n\n📌 Команды:\n`/guild` — информация о гильдии\n`/user` — информация об игроке\n`/skam` — список скамеров\n`/bank` — ваш банковский счёт\n`/gift` — перевод gold\n\n👨‍💻 Создатель: @herozvz",
+        "ℹ️ *Информация*\n\n📌 Команды:\n`/guild` — информация о гильдии\n`/user` — информация об игроке\n`/skam` — список ",
         parse_mode="Markdown"
     )
 
@@ -341,7 +358,7 @@ def buy_gold_menu(call):
     try:
         bot.send_message(
             call.message.chat.id,
-            "💰 *Курс Gold на данный момент*\n\n🇷🇺 Россия (RUB)\n`20₽ = 1kk Gold`\n\n🇺🇦 Украина (UAH)\n`11₴ = 1kk Gold`\n\n🇰🇿 Казахстан (KZT)\n`130₸ = 1kk Gold`\n\n🇧🇾 Беларусь (BYN)\n`0.8 BYN = 1kk Gold`\n\n🇺🇸 Доллар (USD)\n`$0.3 = 1kk Gold`",
+            "💰 *Курс Gold на данный момент*\n\n🇷🇺 Россия (RUB)\n`20₽ = 1kk Gold`\n\n🇺🇦 Украина (UAH)\n`11₴ = 1kk Gold`\n\n🇰🇿 Казахстан (KZT)\n`130₸ = 1kk Gold`\n\n🇧🇾 Беларусь (BYN)\n`0.8 BYN = 1kk Gold`\n\n🇺🇸 USD\n`$0.3 = 1kk Gold`",
             parse_mode="Markdown",
             reply_markup=kb
         )
@@ -519,8 +536,8 @@ def handle_text_states(msg):
                 types.InlineKeyboardButton("❌ Отмена", callback_data=f"gconfirm_no_{uid}")
             )
             bot.send_message(msg.chat.id, 
-                           f"❓ Отправить *{amount:,}* gold игроку *{state['target_name']}* (ID: `{state['target_id']}`)?\n\nВаш баланс после перевода: *{balance - amount:,}* gold", 
-                           parse_mode="Markdown", reply_markup=kb)
+                            f"❓ Отправить *{amount:,}* gold игроку *{state['target_name']}* (ID: `{state['target_id']}`)?\n\nВаш баланс после перевода: *{balance - amount:,}* gold",
+                            parse_mode="Markdown", reply_markup=kb)
         except ValueError:
             bot.reply_to(msg, "❌ Введите сумму цифрами.")
 
@@ -557,8 +574,8 @@ def gift_final_stage(call):
                               call.message.chat.id, call.message.message_id, parse_mode="Markdown")
         try:
             bot.send_message(target, 
-                           f"💰 Вам пришел перевод: *{amount:,}* gold от игрока ID: `{owner_id}`\n\nПроверьте `/bank`", 
-                           parse_mode="Markdown")
+                            f"💰 Вам пришел перевод: *{amount:,}* gold от игрока ID: `{owner_id}`\n\nПроверьте `/bank`", 
+                            parse_mode="Markdown")
         except: 
             pass
     else:
@@ -713,8 +730,12 @@ def handle_admin_text(msg):
 if __name__ == "__main__":
     # Запускаем Flask в отдельном потоке (Thread)
     # Мы используем лямбда-функцию, чтобы запустить app.run без создания лишних функций
+    keep_alive_thread = Thread(target=keep_alive)
+    keep_alive_thread.daemon = False
+    keep_alive_thread.start()
+
     flask_thread = Thread(target=lambda: app.run(host="0.0.0.0", port=int(os.environ.get("PORT", 10000))))
-    flask_thread.daemon = True
+    flask_thread.daemon = False
     flask_thread.start()
     
     print("✅ Flask API запущен на порту", os.environ.get("PORT", 10000))
