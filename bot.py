@@ -23,6 +23,7 @@ HEADERS = {"User-Agent": "Mozilla/5.0"}
 # ---------------- Конфигурация ----------------
 TOKEN = os.getenv("BOT_TOKEN")
 ADMIN_ID = 6395348885  # ← ЗАМЕНИ НА СВОЙ TELEGRAM ID (узнать можно через @userinfobot)
+YETI_BOT_ID = os.getenv("YETI_BOT_ID", "YOUR_YETI_BOT_ID")  # ID бота YETI для передачи jewel
 SCAM_FILE = "scammers.json"
 
 if not TOKEN:
@@ -345,7 +346,7 @@ def send_calculator(call):
 def info_callback(call):
     bot.send_message(
         call.message.chat.id,
-        "ℹ️ *Информация*\n\n📌 Команды:\n`/guild` — информация о гильдии\n`/user` — информация об игроке\n`/skam` — список ",
+        "ℹ️ *Информация*\n\n📌 Команды:\n`/guild` — информация о гильдии\n`/user` — информация об игроке\n`/skam` — список",
         parse_mode="Markdown"
     )
 
@@ -358,7 +359,7 @@ def buy_gold_menu(call):
     try:
         bot.send_message(
             call.message.chat.id,
-            "💰 *Курс Gold на данный момент*\n\n🇷🇺 Россия (RUB)\n`20₽ = 1kk Gold`\n\n🇺🇦 Украина (UAH)\n`11₴ = 1kk Gold`\n\n🇰🇿 Казахстан (KZT)\n`130₸ = 1kk Gold`\n\n🇧🇾 Беларусь (BYN)\n`0.8 BYN = 1kk Gold`\n\n🇺🇸 USD\n`$0.3 = 1kk Gold`",
+            "💰 *Курс Gold на данный момент*\n\n🇷🇺 Россия (RUB)\n`20₽ = 1kk Gold`\n\n🇺🇦 Украина (UAH)\n`11₴ = 1kk Gold`\n\n🇰🇿 Казахст",
             parse_mode="Markdown",
             reply_markup=kb
         )
@@ -536,7 +537,7 @@ def handle_text_states(msg):
                 types.InlineKeyboardButton("❌ Отмена", callback_data=f"gconfirm_no_{uid}")
             )
             bot.send_message(msg.chat.id, 
-                            f"❓ Отправить *{amount:,}* gold игроку *{state['target_name']}* (ID: `{state['target_id']}`)?\n\nВаш баланс после перевода: *{balance - amount:,}* gold",
+                            f"❓ Отправить *{amount:,}* gold игроку *{state['target_name']}* (ID: `{state['target_id']}`)?\n\nВаш баланс после перевода: *{balance - amount:,}*",
                             parse_mode="Markdown", reply_markup=kb)
         except ValueError:
             bot.reply_to(msg, "❌ Введите сумму цифрами.")
@@ -686,6 +687,8 @@ def admin_panel(msg):
         types.InlineKeyboardButton("⚙️ Установить баланс", callback_data="adm_set"),
         types.InlineKeyboardButton("🚫 Бан/Разбан", callback_data="adm_ban")
     )
+    kb.add(types.InlineKeyboardButton("💎 Отправить Jewel (YETI)", callback_data="adm_jewel"))
+    
     bot.send_message(msg.chat.id, "🛠 **Панель администратора**", parse_mode="Markdown", reply_markup=kb)
 
 @bot.callback_query_handler(func=lambda c: c.data.startswith("adm_"))
@@ -696,7 +699,16 @@ def admin_callback(call):
     action = call.data.split("_")[1]
     admin_states[call.from_user.id] = {"action": action}
     
-    bot.edit_message_text(f"📝 Действие: {action}. Введите **ID игрока**:", call.message.chat.id, call.message.message_id, parse_mode="Markdown")
+    if action == "jewel":
+        bot.edit_message_text(
+            "💎 *Отправка Jewel через YETI*\n\nВведите **ID получателя**:", 
+            call.message.chat.id, call.message.message_id, parse_mode="Markdown"
+        )
+    else:
+        bot.edit_message_text(
+            f"📝 Действие: {action}. Введите **ID игрока**:", 
+            call.message.chat.id, call.message.message_id, parse_mode="Markdown"
+        )
 
 # Обработка ввода для админа (ID и Сумма)
 @bot.message_handler(func=lambda msg: msg.from_user.id == ADMIN_ID and msg.from_user.id in admin_states)
@@ -710,20 +722,54 @@ def handle_admin_text(msg):
             res = ban_user(state["target_id"], not is_banned(state["target_id"]))
             bot.send_message(msg.chat.id, f"✅ Статус бана изменен для `{state['target_id']}`")
             admin_states.pop(aid)
+        elif state["action"] == "jewel":
+            # Для jewel сразу просим количество
+            bot.send_message(msg.chat.id, "💎 Введите количество Jewel:")
         else:
             bot.send_message(msg.chat.id, "💰 Введите сумму:")
     else:
         try:
             amount = int(msg.text.replace(" ", ""))
             target = state["target_id"]
-            if state["action"] == "add": add_balance(target, amount)
-            elif state["action"] == "sub": add_balance(target, -amount)
-            elif state["action"] == "set": set_balance(target, amount)
             
-            bot.send_message(msg.chat.id, f"✅ Успешно выполнено для {target}")
+            if state["action"] == "jewel":
+                # Отправляем jewel через YETI
+                send_jewel_via_yeti(target, amount, msg.chat.id)
+            else:
+                if state["action"] == "add": 
+                    add_balance(target, amount)
+                elif state["action"] == "sub": 
+                    add_balance(target, -amount)
+                elif state["action"] == "set": 
+                    set_balance(target, amount)
+                
+                bot.send_message(msg.chat.id, f"✅ Успешно выполнено для {target}")
+            
             admin_states.pop(aid)
         except:
             bot.send_message(msg.chat.id, "❌ Ошибка! Введите число.")
+
+def send_jewel_via_yeti(user_id, amount, admin_chat_id):
+    """
+    Отправляет Jewel через бота YETI напрямую, без публичных сообщений в чате
+    """
+    try:
+        # Формируем команду для YETI бота (пример: /give_jewel user_id amount)
+        # Это зависит от того, как настроен YETI бот
+        message_text = f"/give_jewel {user_id} {amount}"
+        
+        # Отправляем команду в личку YETI боту
+        bot.send_message(YETI_BOT_ID, message_text)
+        
+        # Подтверждение админу
+        bot.send_message(
+            admin_chat_id, 
+            f"✅ Отправлено {amount} Jewel пользователю {user_id} через YETI (приватно, без публикации в чате)"
+        )
+        
+    except Exception as e:
+        print(f"Ошибка при отправке Jewel: {e}")
+        bot.send_message(admin_chat_id, f"❌ Ошибка отправки Jewel: {str(e)}")
 
 # -------- ЗАПУСК БОТА И API --------
 
